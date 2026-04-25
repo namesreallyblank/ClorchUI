@@ -16,8 +16,9 @@
 
 import { SharedContextFactory } from './browserContextFactory';
 import { Context } from './context';
+import type { SharedBrowserManager } from './sharedBrowserManager';
 
-export function setupExitWatchdog() {
+export function setupExitWatchdog(browserManager?: SharedBrowserManager) {
   let isExiting = false;
   const handleExit = async () => {
     if (isExiting)
@@ -27,6 +28,8 @@ export function setupExitWatchdog() {
     setTimeout(() => process.exit(0), 15000);
     await Context.disposeAll();
     await SharedContextFactory.dispose();
+    if (browserManager)
+      await browserManager.cleanup();
     // eslint-disable-next-line no-restricted-properties
     process.exit(0);
   };

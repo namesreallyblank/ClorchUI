@@ -29,6 +29,7 @@ import { firstRootPath } from '../sdk/server';
 import type { FullConfig } from './config';
 import type { LaunchOptions, BrowserContextOptions } from '../../../../playwright-core/src/client/types';
 import type { ClientInfo } from '../sdk/server';
+import { SharedBrowserContextFactory } from './sharedBrowserContextFactory';
 
 export function contextFactory(config: FullConfig): BrowserContextFactory {
   if (config.sharedBrowserContext)
@@ -39,7 +40,7 @@ export function contextFactory(config: FullConfig): BrowserContextFactory {
     return new CdpContextFactory(config);
   if (config.browser.isolated)
     return new IsolatedContextFactory(config);
-  return new PersistentContextFactory(config);
+  return new SharedBrowserContextFactory(config);
 }
 
 export type BrowserContextFactoryResult = {
@@ -187,89 +188,6 @@ class RemoteContextFactory extends BaseContextFactory {
 
   protected override async _doCreateContext(browser: playwright.Browser): Promise<playwright.BrowserContext> {
     return browser.newContext();
-  }
-}
-
-class PersistentContextFactory implements BrowserContextFactory {
-  readonly config: FullConfig;
-  readonly name = 'persistent';
-  readonly description = 'Create a new persistent browser context';
-
-  private _userDataDirs = new Set<string>();
-
-  constructor(config: FullConfig) {
-    this.config = config;
-  }
-
-  async createContext(clientInfo: ClientInfo, abortSignal: AbortSignal, options: CreateContextOptions): Promise<BrowserContextFactoryResult> {
-    await injectCdpPort(this.config.browser);
-    testDebug('create browser context (persistent)');
-    const userDataDir = this.config.browser.userDataDir ?? await this._createUserDataDir(clientInfo);
-    const tracesDir = await computeTracesDir(this.config, clientInfo);
-    if (tracesDir && this.config.saveTrace)
-      await startTraceServer(this.config, tracesDir);
-
-    this._userDataDirs.add(userDataDir);
-    testDebug('lock user data dir', userDataDir);
-
-    const browserType = playwright[this.config.browser.browserName];
-    for (let i = 0; i < 5; i++) {
-      const launchOptions: LaunchOptions & BrowserContextOptions = {
-        tracesDir,
-        ...this.config.browser.launchOptions,
-        ...await browserContextOptionsFromConfig(this.config, clientInfo),
-        handleSIGINT: false,
-        handleSIGTERM: false,
-        ignoreDefaultArgs: [
-          '--disable-extensions',
-        ],
-        assistantMode: true,
-        ...(options.forceHeadless !== undefined ? { headless: options.forceHeadless === 'headless' } : {}),
-      };
-      try {
-        const browserContext = await browserType.launchPersistentContext(userDataDir, launchOptions);
-        await addInitScript(browserContext, this.config.browser.initScript);
-        const close = () => this._closeBrowserContext(browserContext, userDataDir);
-        return { browserContext, close };
-      } catch (error: any) {
-        if (error.message.includes('Executable doesn\'t exist'))
-          throw new Error(`Browser specified in your config is not installed. Either install it (likely) or change the config.`);
-        if (error.message.includes('cannot open shared object file: No such file or directory')) {
-          const browserName = launchOptions.channel ?? this.config.browser.browserName;
-          throw new Error(`Missing system dependencies required to run browser ${browserName}. Install them with: sudo npx playwright install-deps ${browserName}`);
-        }
-        if (error.message.includes('ProcessSingleton') ||
-            // On Windows the process exits silently with code 21 when the profile is in use.
-            error.message.includes('exitCode=21')) {
-          // User data directory is already in use, try again.
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          continue;
-        }
-        throw error;
-      }
-    }
-    throw new Error(`Browser is already in use for ${userDataDir}, use --isolated to run multiple instances of the same browser`);
-  }
-
-  private async _closeBrowserContext(browserContext: playwright.BrowserContext, userDataDir: string) {
-    testDebug('close browser context (persistent)');
-    testDebug('release user data dir', userDataDir);
-    await browserContext.close().catch(() => {});
-    this._userDataDirs.delete(userDataDir);
-    if (process.env.PWMCP_PROFILES_DIR_FOR_TEST && userDataDir.startsWith(process.env.PWMCP_PROFILES_DIR_FOR_TEST))
-      await fs.promises.rm(userDataDir, { recursive: true }).catch(logUnhandledError);
-    testDebug('close browser context complete (persistent)');
-  }
-
-  private async _createUserDataDir(clientInfo: ClientInfo) {
-    const dir = process.env.PWMCP_PROFILES_DIR_FOR_TEST ?? registryDirectory;
-    const browserToken = this.config.browser.launchOptions?.channel ?? this.config.browser?.browserName;
-    // Hesitant putting hundreds of files into the user's workspace, so using it for hashing instead.
-    const rootPath = firstRootPath(clientInfo);
-    const rootPathToken = rootPath ? `-${createHash(rootPath)}` : '';
-    const result = path.join(dir, `mcp-${browserToken}${rootPathToken}`);
-    await fs.promises.mkdir(result, { recursive: true });
-    return result;
   }
 }
 

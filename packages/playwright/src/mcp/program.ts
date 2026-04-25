@@ -28,6 +28,7 @@ import { setupExitWatchdog } from './browser/watchdog';
 import { contextFactory } from './browser/browserContextFactory';
 import { BrowserServerBackend } from './browser/browserServerBackend';
 import { ExtensionContextFactory } from './extension/extensionContextFactory';
+import { SharedBrowserContextFactory } from './browser/sharedBrowserContextFactory';
 
 import type { Command } from 'playwright-core/lib/utilsBundle';
 
@@ -78,8 +79,6 @@ export function decorateCommand(command: Command, version: string) {
       .addOption(new ProgramOption('--vision', 'Legacy option, use --caps=vision instead').hideHelp())
       .addOption(new ProgramOption('--daemon <socket>', 'run as daemon').hideHelp())
       .action(async options => {
-        setupExitWatchdog();
-
         if (options.vision) {
           console.error('The --vision option is deprecated, use --caps=vision instead');
           options.caps = 'vision';
@@ -98,6 +97,12 @@ export function decorateCommand(command: Command, version: string) {
 
         const browserContextFactory = contextFactory(config);
         const extensionContextFactory = new ExtensionContextFactory(config.browser.launchOptions.channel || 'chrome', config.browser.userDataDir, config.browser.launchOptions.executablePath);
+
+        // Setup exit watchdog with browser manager if using SharedBrowserContextFactory
+        const browserManager = browserContextFactory instanceof SharedBrowserContextFactory
+          ? browserContextFactory.manager
+          : undefined;
+        setupExitWatchdog(browserManager);
 
         if (options.extension) {
           const serverBackendFactory: mcpServer.ServerBackendFactory = {

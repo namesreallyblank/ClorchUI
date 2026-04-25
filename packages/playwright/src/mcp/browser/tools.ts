@@ -33,6 +33,16 @@ import tabs from './tools/tabs';
 import tracing from './tools/tracing';
 import wait from './tools/wait';
 import verify from './tools/verify';
+import uiuxInspection from './tools/uiux-inspection';
+import uiuxResponsive from './tools/uiux-responsive';
+import uiuxAccessibility from './tools/uiux-accessibility';
+import uiuxStyling from './tools/uiux-styling';
+import uiuxPerformance from './tools/uiux-performance';
+import uiuxTokens from './tools/uiux-tokens';
+import uiuxOverflow from './tools/uiux-overflow';
+import uiuxAnimation from './tools/uiux-animation';
+import uiuxViewport from './tools/uiux-viewport';
+import uiuxSpacing from './tools/uiux-spacing';
 
 import type { Tool } from './tools/tool';
 import type { FullConfig } from './config';
@@ -57,6 +67,16 @@ export const browserTools: Tool<any>[] = [
   ...tracing,
   ...wait,
   ...verify,
+  ...uiuxInspection,
+  ...uiuxResponsive,
+  ...uiuxAccessibility,
+  ...uiuxStyling,
+  ...uiuxPerformance,
+  ...uiuxTokens,
+  ...uiuxOverflow,
+  ...uiuxAnimation,
+  ...uiuxViewport,
+  ...uiuxSpacing,
 ];
 
 export function filteredTools(config: FullConfig) {
