@@ -41,6 +41,17 @@ import video from './video';
 import wait from './wait';
 import webstorage from './webstorage';
 
+import uiuxAccessibility from './uiux-accessibility';
+import uiuxAnimation from './uiux-animation';
+import uiuxInspection from './uiux-inspection';
+import uiuxOverflow from './uiux-overflow';
+import uiuxPerformance from './uiux-performance';
+import uiuxResponsive from './uiux-responsive';
+import uiuxSpacing from './uiux-spacing';
+import uiuxStyling from './uiux-styling';
+import uiuxTokens from './uiux-tokens';
+import uiuxViewport from './uiux-viewport';
+
 import type { Tool } from './tool';
 import type { ContextConfig } from './context';
 
@@ -70,6 +81,16 @@ export const browserTools: Tool<any>[] = [
   ...video,
   ...wait,
   ...webstorage,
+  ...uiuxAccessibility,
+  ...uiuxAnimation,
+  ...uiuxInspection,
+  ...uiuxOverflow,
+  ...uiuxPerformance,
+  ...uiuxResponsive,
+  ...uiuxSpacing,
+  ...uiuxStyling,
+  ...uiuxTokens,
+  ...uiuxViewport,
 ];
 
 export function filteredTools(config: Pick<ContextConfig, 'capabilities'>) {
