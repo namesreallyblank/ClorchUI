@@ -24,6 +24,7 @@ import dialogs from './dialogs';
 import evaluate from './evaluate';
 import files from './files';
 import form from './form';
+import hud from './hud';
 import keyboard from './keyboard';
 import mouse from './mouse';
 import navigate from './navigate';
@@ -65,6 +66,7 @@ export const browserTools: Tool<any>[] = [
   ...evaluate,
   ...files,
   ...form,
+  ...hud,
   ...keyboard,
   ...mouse,
   ...navigate,
