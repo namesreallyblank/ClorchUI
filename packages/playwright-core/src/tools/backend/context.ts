@@ -27,6 +27,8 @@ import { playwright } from '../../inprocess';
 
 import { dedent, languageGeneratorId, secretCode } from './codegen';
 import { Tab } from './tab';
+import { ensureHudServer } from './hudServer';
+import { hudClientScript } from './hudClient';
 
 import type { BrowserContextEx } from './browserContextEx';
 import type { CodegenLanguage } from './codegen';
@@ -113,6 +115,7 @@ export class Context {
   private _disposables: Disposable[] = [];
 
   private _runningToolName: string | undefined;
+  private _hudInjected = false;
   private _pendingUnhandledRejections: unknown[] = [];
   private _unhandledRejectionListeners = new Set<(reason: unknown) => void>();
   private _onUnhandledRejection = (reason: unknown) => {
@@ -373,6 +376,20 @@ export class Context {
     return this._browserContextPromise;
   }
 
+  /**
+   * Idempotently start the local HUD WebSocket server and register the HUD
+   * client as an init script on the given browser context so it runs on every
+   * page and after every navigation. Returns the WS port.
+   */
+  async ensureHudInjected(browserContext: playwrightTypes.BrowserContext): Promise<number> {
+    const server = await ensureHudServer(this.options.cwd);
+    if (!this._hudInjected) {
+      this._hudInjected = true;
+      this._disposables.push(await browserContext.addInitScript(hudClientScript, { port: server.port }));
+    }
+    return server.port;
+  }
+
   private async _initializeBrowserContext() {
     if (this.config.testIdAttribute)
       playwright.selectors.setTestIdAttribute(this.config.testIdAttribute);
@@ -381,6 +398,11 @@ export class Context {
 
     for (const initScript of this.config.browser?.initScript || [])
       this._disposables.push(await browserContext.addInitScript({ path: path.resolve(this.options.cwd, initScript) }));
+
+    // Always-on Clorch HUD injection: start the local WS server (so the port
+    // is known) and register the client init script before any page loads, so
+    // the realtime channel is live on every page and after every navigation.
+    await this.ensureHudInjected(browserContext);
 
     for (const page of browserContext.pages())
       this._onPageCreated(page);
