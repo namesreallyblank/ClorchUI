@@ -70,7 +70,7 @@ export function hudClientScript(arg: { port: number }) {
 
   function connect() {
     try {
-      ws = new WebSocket('ws://127.0.0.1:' + PORT);
+      ws = new WebSocket('wss://127.0.0.1:' + PORT);
     } catch (err) {
       // Construction can throw on malformed URL / blocked schemes. Log and retry.
       // eslint-disable-next-line no-console

@@ -40,7 +40,7 @@ const hudOpen = defineTabTool({
     // against double-install via window.__clorchHudInstalled.
     await tab.page.evaluate(hudClientScript, { port });
     response.addTextResult(
-        `Clorch HUD ready on ws://127.0.0.1:${port}. ` +
+        `Clorch HUD ready on wss://127.0.0.1:${port}. ` +
         `Press Ctrl/Cmd+Shift+K in the browser to pick an element, type a message, and press Enter. ` +
         `Call browser_hud_watch to receive messages in realtime.`);
   },
