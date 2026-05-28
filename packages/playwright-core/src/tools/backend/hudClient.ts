@@ -172,7 +172,7 @@ export function hudClientScript(arg: { port: number }) {
   // ---- Picker state ----
   let picking = false;
   let hoverEl: Element | null = null;
-  let selected: { selector: string; tag: string; text: string } | null = null;
+  let selected: { selector: string; tag: string; text: string; el: Element } | null = null;
 
   const highlightBox = document.createElement('div');
   highlightBox.className = NS + 'highlight';
@@ -245,6 +245,7 @@ export function hudClientScript(arg: { port: number }) {
       selector: cssPath(el),
       tag: el.nodeName.toLowerCase(),
       text: ((el as HTMLElement).innerText || el.textContent || '').trim().slice(0, 200),
+      el,
     };
     stopPicking();
     openPanel();
@@ -479,6 +480,7 @@ export function hudClientScript(arg: { port: number }) {
     const message = inputEl.value.trim();
     if (!message)
       return;
+    const rect = selected ? selected.el.getBoundingClientRect() : null;
     const payload = {
       type: 'hud_message',
       selector: selected ? selected.selector : '',
@@ -486,6 +488,14 @@ export function hudClientScript(arg: { port: number }) {
       text: selected ? selected.text : '',
       message,
       url: location.href,
+      wantsShot: true,
+      bbox: rect ? {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        dpr: window.devicePixelRatio || 1,
+      } : null,
     };
     const ok = sendMessage(payload);
     if (ok) {
