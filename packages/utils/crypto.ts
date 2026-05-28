@@ -75,6 +75,9 @@ class DER {
   static encodePrintableString(data: string): Buffer {
     return this._encode(0x13, Buffer.from(data));
   }
+  static encodeOctetString(data: Buffer): Buffer {
+    return this._encode(0x04, data);
+  }
   static encodeBitString(data: Buffer): Buffer {
     // The first byte of the content is the number of unused bits at the end
     const unusedBits = 0; // Assuming all bits are used
@@ -123,9 +126,25 @@ export function generateSelfSignedCertificate() {
   const notBefore = new Date(new Date().getTime() - oneYearInMilliseconds);
   const notAfter = new Date(new Date().getTime() + oneYearInMilliseconds);
 
+  // subjectAltName extension: SAN over IP 127.0.0.1 and DNS localhost.
+  // GeneralName uses CONTEXT-class PRIMITIVE tags: iPAddress [7] = 0x87, dNSName [2] = 0x82.
+  // These are primitive context tags (not the 0xa0+tag constructed form), so encode raw.
+  const encodeGeneralName = (tag: number, data: Buffer): Buffer => {
+    const lengthBytes = data.length < 128 ? Buffer.from([data.length]) : Buffer.from([0x81, data.length]);
+    return Buffer.concat([Buffer.from([tag]), lengthBytes, data]);
+  };
+  const generalNames = DER.encodeSequence([
+    encodeGeneralName(0x87, Buffer.from([0x7f, 0x00, 0x00, 0x01])), // iPAddress 127.0.0.1
+    encodeGeneralName(0x82, Buffer.from('localhost')), // dNSName localhost
+  ]);
+  const subjectAltNameExtension = DER.encodeSequence([
+    DER.encodeObjectIdentifier('2.5.29.17'), // id-ce-subjectAltName
+    DER.encodeOctetString(generalNames), // extnValue wraps the GeneralNames DER
+  ]);
+
   // List of fields / structure: https://datatracker.ietf.org/doc/html/rfc2459#section-4.1
   const tbsCertificate = DER.encodeSequence([
-    DER.encodeExplicitContextDependent(0, DER.encodeInteger(1)), // version
+    DER.encodeExplicitContextDependent(0, DER.encodeInteger(2)), // version v3
     DER.encodeInteger(1), // serialNumber
     DER.encodeSequence([
       DER.encodeObjectIdentifier('1.2.840.113549.1.1.11'), // sha256WithRSAEncryption PKCS #1
@@ -170,6 +189,9 @@ export function generateSelfSignedCertificate() {
       ]),
       DER.encodeBitString(publicKeyDer)
     ]), // SubjectPublicKeyInfo
+    DER.encodeExplicitContextDependent(3, DER.encodeSequence([
+      subjectAltNameExtension,
+    ])), // [3] EXPLICIT extensions (SEQUENCE OF Extension)
   ]);
 
   const signature = crypto.sign('sha256', tbsCertificate, privateKey);

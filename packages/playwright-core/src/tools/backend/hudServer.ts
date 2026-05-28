@@ -15,12 +15,14 @@
  */
 
 import fs from 'fs';
+import https from 'https';
 import os from 'os';
 import path from 'path';
 
 import debug from 'debug';
 import { WebSocketServer } from 'ws';
 import { ManualPromise } from '@isomorphic/manualPromise';
+import { generateSelfSignedCertificate } from '@utils/crypto';
 
 import type { WebSocket } from 'ws';
 
@@ -37,6 +39,7 @@ export type HudMessage = {
 type ReceivedHudMessage = HudMessage & { timestamp: string };
 
 class HudServer {
+  private _httpsServer: https.Server;
   private _wss: WebSocketServer;
   private _port = 0;
   private _sockets = new Set<WebSocket>();
@@ -47,21 +50,28 @@ class HudServer {
 
   constructor(projectRoot: string) {
     this._projectRoot = projectRoot;
+    // Serve the HUD ws over TLS (wss://). An insecure ws:// from an HTTPS
+    // top-level origin is blocked by Chromium as mixed active content (the
+    // handshake silently stalls). A self-signed cert for loopback fixes this;
+    // the browser side accepts it via contextOptions.ignoreHTTPSErrors.
+    const { cert, key } = generateSelfSignedCertificate();
+    this._httpsServer = https.createServer({ cert, key });
     // Ephemeral port on loopback only.
-    this._wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    this._wss = new WebSocketServer({ server: this._httpsServer });
+    this._httpsServer.listen(0, '127.0.0.1');
 
     this._readyPromise = new Promise<number>((resolve, reject) => {
-      this._wss.once('listening', () => {
-        const address = this._wss.address();
+      this._httpsServer.once('listening', () => {
+        const address = this._httpsServer.address();
         if (address && typeof address === 'object') {
           this._port = address.port;
-          log('HUD WebSocket server listening on 127.0.0.1:%d', this._port);
+          log('HUD WebSocket server listening on wss://127.0.0.1:%d', this._port);
           resolve(this._port);
         } else {
           reject(new Error('HUD WebSocket server failed to obtain a port'));
         }
       });
-      this._wss.once('error', err => {
+      this._httpsServer.once('error', err => {
         log('HUD WebSocket server error during startup: %s', (err as Error).message);
         reject(err);
       });
