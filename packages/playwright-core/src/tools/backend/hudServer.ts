@@ -132,20 +132,21 @@ class HudServer {
       this._queue.push(received);
     }
 
-    // Always write the fallback file so prompts surface it even if nobody is watching.
-    this._writeFallbackFile(received);
+    // Always append to the durable workspace queue so prompts/watcher surface
+    // it even if nobody is currently long-polling.
+    this._appendQueue(received);
   }
 
-  private _writeFallbackFile(received: ReceivedHudMessage) {
+  private _appendQueue(received: ReceivedHudMessage) {
     try {
-      const target = path.join(this._projectRoot, '.clorchui-hud-message.json');
-      const tmp = path.join(this._projectRoot, `.clorchui-hud-message.${process.pid}.tmp`);
-      fs.writeFileSync(tmp, JSON.stringify(received, null, 2), 'utf-8');
-      fs.renameSync(tmp, target); // Atomic on POSIX.
-      log('HUD fallback file written: %s', target);
+      const target = path.join(this._projectRoot, '.clorchui-hud-queue.jsonl');
+      // Append-only JSONL: one JSON object per line. appendFileSync creates the
+      // file if missing and is atomic enough for single-line appends.
+      fs.appendFileSync(target, JSON.stringify(received) + '\n', 'utf-8');
+      log('HUD message appended to queue: %s', target);
     } catch (err) {
       // Log, never crash the socket handler.
-      log('HUD fallback file write failed: %s', (err as Error).message);
+      log('HUD queue append failed: %s', (err as Error).message);
     }
   }
 
