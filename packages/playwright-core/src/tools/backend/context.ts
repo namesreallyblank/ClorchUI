@@ -322,6 +322,10 @@ export class Context {
    */
   async ensureHudInjected(browserContext: playwrightTypes.BrowserContext): Promise<number> {
     const server = await ensureHudServer(this.options.cwd);
+    // Bridge: let the HUD server resolve a Page by URL for screenshot capture
+    // (v0.15.3). Safe to re-register — server keeps only the latest context per
+    // server instance; subsequent calls just refresh the reference.
+    server.registerBrowserContext(browserContext);
     if (!this._hudInjected) {
       this._hudInjected = true;
       this._disposables.push(await browserContext.addInitScript(hudClientScript, { port: server.port }));

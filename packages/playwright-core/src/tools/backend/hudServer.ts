@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import crypto from 'crypto';
 import fs from 'fs';
 import https from 'https';
 import os from 'os';
@@ -25,6 +26,7 @@ import { ManualPromise } from '@isomorphic/manualPromise';
 import { generateSelfSignedCertificate } from '@utils/crypto';
 
 import type { WebSocket } from 'ws';
+import type * as playwrightTypes from '../../..';
 
 const log = debug('pw:mcp:hud');
 
@@ -36,7 +38,14 @@ export type HudMessage = {
   url: string;
 };
 
-type ReceivedHudMessage = HudMessage & { timestamp: string };
+type HudBbox = { x: number; y: number; width: number; height: number; dpr: number };
+
+type ReceivedHudMessage = HudMessage & {
+  timestamp: string;
+  screenshot?: string;
+  bbox?: HudBbox | null;
+  wantsShot?: boolean;
+};
 
 class HudServer {
   private _httpsServer: https.Server;
@@ -47,6 +56,9 @@ class HudServer {
   private _pending: ManualPromise<ReceivedHudMessage | null> | null = null;
   private _readyPromise: Promise<number>;
   private _projectRoot: string;
+  // Bridge from Context.ensureHudInjected — used by _captureShot to resolve a
+  // Page by URL when a HUD message arrives.
+  private _browserContext: playwrightTypes.BrowserContext | null = null;
 
   constructor(projectRoot: string) {
     this._projectRoot = projectRoot;
@@ -94,7 +106,12 @@ class HudServer {
           log('HUD ignoring non-hud_message frame: %j', parsed);
           return;
         }
-        this._onHudMessage(parsed);
+        // Fire-and-forget; _onHudMessage handles its own errors internally,
+        // but log any unhandled rejection rather than letting it surface as
+        // an unhandled promise rejection (silent-failure rule).
+        this._onHudMessage(parsed).catch(err => {
+          log('HUD onMessage unhandled error: %s', (err as Error).message);
+        });
       });
 
       socket.on('error', err => {
@@ -112,7 +129,14 @@ class HudServer {
     });
   }
 
-  private _onHudMessage(parsed: any) {
+  private async _onHudMessage(parsed: any) {
+    const bbox: HudBbox | null = parsed && parsed.bbox && typeof parsed.bbox === 'object' ? {
+      x: Number(parsed.bbox.x) || 0,
+      y: Number(parsed.bbox.y) || 0,
+      width: Number(parsed.bbox.width) || 0,
+      height: Number(parsed.bbox.height) || 0,
+      dpr: Number(parsed.bbox.dpr) || 1,
+    } : null;
     const received: ReceivedHudMessage = {
       selector: String(parsed.selector ?? ''),
       message: String(parsed.message ?? ''),
@@ -120,8 +144,17 @@ class HudServer {
       text: String(parsed.text ?? ''),
       url: String(parsed.url ?? ''),
       timestamp: new Date().toISOString(),
+      wantsShot: parsed.wantsShot === true,
+      bbox,
     };
-    log('HUD message received: %j', received);
+    log('HUD message received: %j', { ...received, bbox: received.bbox ? '<bbox>' : null });
+
+    // Capture screenshot BEFORE queue/append so the JSONL line carries the path.
+    if (received.wantsShot) {
+      const shotPath = await this._captureShot(received);
+      if (shotPath)
+        received.screenshot = shotPath;
+    }
 
     // Resolve a waiting long-poll immediately; otherwise queue it.
     if (this._pending && !this._pending.isDone()) {
@@ -135,6 +168,132 @@ class HudServer {
     // Always append to the durable workspace queue so prompts/watcher surface
     // it even if nobody is currently long-polling.
     this._appendQueue(received);
+  }
+
+  /**
+   * Register the active BrowserContext so _captureShot can resolve a Page by
+   * URL. Called from Context.ensureHudInjected. The most recently registered
+   * context wins — a fresh `claude` session always rebinds before injection.
+   */
+  registerBrowserContext(browserContext: playwrightTypes.BrowserContext): void {
+    this._browserContext = browserContext;
+  }
+
+  /**
+   * Pick the best Page for a HUD message URL. Strategy:
+   *   1. Exact URL match.
+   *   2. Same origin + pathname (querystring may have drifted).
+   *   3. Single-page session → use the only page.
+   *   4. Most recently active page (last in pages() list, Playwright convention).
+   */
+  private _findPageForUrl(url: string): playwrightTypes.Page | null {
+    const ctx = this._browserContext;
+    if (!ctx)
+      return null;
+    const pages = ctx.pages();
+    if (!pages.length)
+      return null;
+    if (pages.length === 1)
+      return pages[0];
+    const exact = pages.find(p => p.url() === url);
+    if (exact)
+      return exact;
+    try {
+      const want = new URL(url);
+      const sameOriginPath = pages.find(p => {
+        try {
+          const have = new URL(p.url());
+          return have.origin === want.origin && have.pathname === want.pathname;
+        } catch {
+          return false;
+        }
+      });
+      if (sameOriginPath)
+        return sameOriginPath;
+    } catch {
+      // Malformed url string — fall through to last-page fallback.
+    }
+    return pages[pages.length - 1];
+  }
+
+  /**
+   * Capture a PNG of the picked element + 32px padding (viewport-clipped).
+   *
+   * Resolution order:
+   *   1. page.locator(selector).boundingBox() (live, auto-scrolls into view)
+   *   2. payload bbox from the client (viewport-coords at send time)
+   *   3. full-page fallback (Decision 5 — blurry beats empty)
+   *
+   * Returns absolute path to the written PNG, or undefined on failure or when
+   * disabled via CLORCHUI_HUD_SHOTS=off. Never throws — logs and returns.
+   */
+  private async _captureShot(received: ReceivedHudMessage): Promise<string | undefined> {
+    if (process.env.CLORCHUI_HUD_SHOTS === 'off') {
+      log('HUD shot skipped — CLORCHUI_HUD_SHOTS=off');
+      return undefined;
+    }
+    const page = this._findPageForUrl(received.url);
+    if (!page) {
+      log('HUD shot skipped — no page registered for url=%s', received.url);
+      return undefined;
+    }
+
+    const shotsDir = path.join(this._projectRoot, '.clorchui-hud-shots');
+    const tsFile = received.timestamp.replace(/[:.]/g, '-');
+    const hash6 = crypto.randomBytes(3).toString('hex');
+    const outPath = path.join(shotsDir, `${tsFile}-${hash6}.png`);
+
+    try {
+      fs.mkdirSync(shotsDir, { recursive: true });
+    } catch (err) {
+      log('HUD shot mkdir failed: %s', (err as Error).message);
+      return undefined;
+    }
+
+    // Determine viewport for clip clamping. viewportSize() can be null in
+    // some edge cases (e.g. windowed mode); fall back to a sane default.
+    const vp = page.viewportSize() || { width: 1280, height: 720 };
+
+    // Try selector → bbox fallback → full-page fallback.
+    let rect: { x: number; y: number; width: number; height: number } | null = null;
+    if (received.selector) {
+      try {
+        const box = await page.locator(received.selector).first().boundingBox({ timeout: 1500 });
+        if (box && box.width > 0 && box.height > 0)
+          rect = box;
+      } catch (err) {
+        log('HUD shot locator boundingBox failed: %s', (err as Error).message);
+      }
+    }
+    if (!rect && received.bbox && received.bbox.width > 0 && received.bbox.height > 0)
+      rect = { x: received.bbox.x, y: received.bbox.y, width: received.bbox.width, height: received.bbox.height };
+
+    try {
+      if (rect) {
+        // Pad 32px on each side, clamp to viewport (never negative coords / never overshoot).
+        const PAD = 32;
+        const x = Math.max(0, Math.floor(rect.x - PAD));
+        const y = Math.max(0, Math.floor(rect.y - PAD));
+        const maxW = Math.max(0, vp.width - x);
+        const maxH = Math.max(0, vp.height - y);
+        const width = Math.min(maxW, Math.ceil(rect.width + PAD * 2 + Math.max(0, Math.floor(rect.x) - x)));
+        const height = Math.min(maxH, Math.ceil(rect.height + PAD * 2 + Math.max(0, Math.floor(rect.y) - y)));
+        if (width <= 0 || height <= 0) {
+          log('HUD shot clip zero after clamp — full-page fallback');
+          await page.screenshot({ path: outPath, type: 'png', fullPage: true });
+        } else {
+          await page.screenshot({ path: outPath, type: 'png', clip: { x, y, width, height } });
+        }
+      } else {
+        log('HUD shot no rect resolved — full-page fallback (selector=%s)', received.selector);
+        await page.screenshot({ path: outPath, type: 'png', fullPage: true });
+      }
+      log('HUD shot written: %s', outPath);
+      return outPath;
+    } catch (err) {
+      log('HUD shot capture failed: %s', (err as Error).message);
+      return undefined;
+    }
   }
 
   private _appendQueue(received: ReceivedHudMessage) {
