@@ -268,6 +268,34 @@ class HudServer {
     if (!rect && received.bbox && received.bbox.width > 0 && received.bbox.height > 0)
       rect = { x: received.bbox.x, y: received.bbox.y, width: received.bbox.width, height: received.bbox.height };
 
+    // Hide the HUD overlay (picker highlight, hover label, panel, etc.) for the
+    // duration of the screenshot so it doesn't appear in the captured PNG.
+    // Uses visibility:hidden (not display:none) to preserve layout — page.screenshot
+    // clip coords are resolved against the live viewport, so any reflow would crop
+    // the wrong area. Hide/capture/restore is wrapped in try/finally so a capture
+    // failure still restores the overlay.
+    let hudHidden = false;
+    try {
+      hudHidden = await page.evaluate(() => {
+        const w = window as any;
+        if (!w.__clorchHud)
+          return false;
+        const NS = 'clorch-hud-';
+        const nodes = document.querySelectorAll<HTMLElement>(`[class^="${NS}"], [class*=" ${NS}"]`);
+        if (!nodes.length)
+          return false;
+        const stash: Array<[HTMLElement, string]> = [];
+        nodes.forEach(n => {
+          stash.push([n, n.style.visibility]);
+          n.style.visibility = 'hidden';
+        });
+        w.__clorchHudShotStash = stash;
+        return true;
+      });
+    } catch (err) {
+      log('HUD shot hide-overlay failed: %s', (err as Error).message);
+    }
+
     try {
       if (rect) {
         // Pad 32px on each side, clamp to viewport (never negative coords / never overshoot).
@@ -293,6 +321,23 @@ class HudServer {
     } catch (err) {
       log('HUD shot capture failed: %s', (err as Error).message);
       return undefined;
+    } finally {
+      if (hudHidden) {
+        try {
+          await page.evaluate(() => {
+            const w = window as any;
+            const stash: Array<[HTMLElement, string]> | undefined = w.__clorchHudShotStash;
+            if (!stash)
+              return;
+            stash.forEach(([n, prev]) => {
+              n.style.visibility = prev;
+            });
+            delete w.__clorchHudShotStash;
+          });
+        } catch (err) {
+          log('HUD shot restore-overlay failed: %s', (err as Error).message);
+        }
+      }
     }
   }
 
