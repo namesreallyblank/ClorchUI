@@ -45,6 +45,7 @@ type ReceivedHudMessage = HudMessage & {
   screenshot?: string;
   bbox?: HudBbox | null;
   wantsShot?: boolean;
+  pad?: number;
 };
 
 class HudServer {
@@ -146,6 +147,7 @@ class HudServer {
       timestamp: new Date().toISOString(),
       wantsShot: parsed.wantsShot === true,
       bbox,
+      pad: typeof parsed.pad === 'number' && parsed.pad >= 0 ? Math.floor(parsed.pad) : undefined,
     };
     log('HUD message received: %j', { ...received, bbox: received.bbox ? '<bbox>' : null });
 
@@ -298,8 +300,9 @@ class HudServer {
 
     try {
       if (rect) {
-        // Pad 32px on each side, clamp to viewport (never negative coords / never overshoot).
-        const PAD = 32;
+        // Pad on each side, clamp to viewport (never negative coords / never overshoot).
+        // Honor a client-supplied pad (HUD settings); default 32 for backward compat.
+        const PAD = (received && typeof received.pad === 'number' && received.pad >= 0) ? Math.floor(received.pad) : 32;
         const x = Math.max(0, Math.floor(rect.x - PAD));
         const y = Math.max(0, Math.floor(rect.y - PAD));
         const maxW = Math.max(0, vp.width - x);

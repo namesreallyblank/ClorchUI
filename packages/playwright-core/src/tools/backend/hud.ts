@@ -26,7 +26,7 @@ const hudOpen = defineTabTool({
   schema: {
     name: 'browser_hud_open',
     title: 'Open the Clorch HUD',
-    description: 'Start the in-page Clorch HUD (element picker + message box). Ensures the local WebSocket server is running and the HUD client is injected into the current page. After calling this, press Ctrl/Cmd+Shift+K in the browser to pick an element and send a message.',
+    description: 'Start the in-page Clorch HUD (element picker + region-draw + message box). Ensures the local WebSocket server is running and the HUD client is injected into the current page. After calling this: press Ctrl/Cmd+Shift+K to pick an element, or Ctrl/Cmd+Shift+D to drag a rectangle and capture an arbitrary region, then type a message and press Enter. The HUD panel is draggable (by its header) and resizable (drag the bottom-right corner); a gear icon opens settings for attach-screenshot, capture padding, theme (dark/light), default mode, and reset position/size.',
     inputSchema: z.object({}),
     type: 'action',
   },
