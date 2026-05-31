@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { execFileSync } from 'child_process';
 import crypto from 'crypto';
 import fs from 'fs';
 import https from 'https';
@@ -29,6 +30,105 @@ import type { WebSocket } from 'ws';
 import type * as playwrightTypes from '../../..';
 
 const log = debug('pw:mcp:hud');
+
+const OWNER_KEY_MAX_HOPS = 8;
+
+/** Sanitize a pid to a filename-safe digit string. */
+function ownerKeyDigits(pid: number | string): string {
+  return String(pid).replace(/[^0-9]/g, '');
+}
+
+/** basename of a comm/exe path, lowercased, with a trailing .exe stripped. */
+function ownerKeyCommName(comm: string): string {
+  let base = path.basename(String(comm).trim());
+  if (base.toLowerCase().endsWith('.exe'))
+    base = base.slice(0, -4);
+  return base.toLowerCase();
+}
+
+/**
+ * Look up (ppid, comm) for a pid. POSIX uses `ps -o ppid=,comm= -p <pid>`;
+ * win32 uses PowerShell Get-CimInstance Win32_Process. Returns the pid's OWN
+ * command name and its parent pid, or null if it cannot be determined.
+ * Throws on the underlying spawn failure (caller catches).
+ */
+function ownerKeyParentInfo(pid: number): { ppid: number; comm: string } | null {
+  let out: string;
+  if (process.platform === 'win32') {
+    // Emit "<ppid> <name>" — ppid is the first whitespace-delimited token, the
+    // rest is the process name (may itself contain spaces).
+    const script =
+      `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; ` +
+      `if ($p) { "$($p.ParentProcessId) $($p.Name)" }`;
+    out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8',
+      timeout: 4000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } else {
+    out = execFileSync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], {
+      encoding: 'utf8',
+      timeout: 2000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  }
+  const line = out.trim();
+  if (!line)
+    return null;
+  // Format: "<ppid> <comm...>" — ppid is the first token, comm is the remainder.
+  const m = line.match(/^\s*(\d+)\s+(.*)$/);
+  if (!m)
+    return null;
+  const ppid = parseInt(m[1], 10);
+  if (!Number.isInteger(ppid))
+    return null;
+  return { ppid, comm: m[2] };
+}
+
+/**
+ * Writer-side mirror of the readers' resolveOwnerKey() (clorchui-owner-key.mjs).
+ * Climbs the process-parent chain from `startPid` and returns the pid (digit
+ * string) of the nearest ancestor whose command basename is `claude`. The MCP
+ * process chain is MCP(node) -> launcher(node) -> claude, so this yields the
+ * same claude pid the hooks resolve.
+ *
+ * Intentional difference from the reader: on ANY failure — or if no `claude`
+ * ancestor is found within OWNER_KEY_MAX_HOPS — this returns null (not
+ * process.ppid). The caller's 3-tier fallback owns the final default so the
+ * writer never silently adopts a non-claude ppid as the owner key.
+ */
+function vendoredResolveOwnerKey(startPid: number = process.pid): string | null {
+  try {
+    let pid = startPid;
+    for (let hop = 0; hop < OWNER_KEY_MAX_HOPS; hop++) {
+      let info: { ppid: number; comm: string } | null;
+      try {
+        info = ownerKeyParentInfo(pid);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(`[clorchui-hud-writer] owner-key parent lookup failed at pid ${pid}: ${(err as Error).message}`);
+        return null;
+      }
+      if (!info || !Number.isInteger(info.ppid) || info.ppid <= 0) {
+        // eslint-disable-next-line no-console
+        console.error(`[clorchui-hud-writer] owner-key no parent info for pid ${pid}`);
+        return null;
+      }
+      if (ownerKeyCommName(info.comm) === 'claude')
+        return ownerKeyDigits(pid);
+      if (info.ppid === pid)
+        break; // Reached the root (pid 1 self-parent on some systems).
+      pid = info.ppid;
+    }
+    // eslint-disable-next-line no-console
+    console.error(`[clorchui-hud-writer] owner-key no 'claude' ancestor within ${OWNER_KEY_MAX_HOPS} hops from ${startPid}`);
+    return null;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(`[clorchui-hud-writer] owner-key resolveOwnerKey failed: ${(err as Error).message}`);
+    return null;
+  }
+}
 
 export type HudMessage = {
   selector: string;
@@ -66,8 +166,15 @@ class HudServer {
     this._projectRoot = projectRoot;
     // Resolve owner key once at construction time. The launcher injects
     // CLORCHUI_OWNER_KEY = the claude session pid so sister sessions each
-    // get a distinct key. Fall back to this MCP process pid if unset.
-    this._ownerKey = (process.env.CLORCHUI_OWNER_KEY || String(process.pid)).replace(/[^0-9]/g, '') || String(process.pid);
+    // get a distinct key. 3-tier resolution:
+    //   1) the injected env key (preferred — exact value the launcher computed);
+    //   2) a writer-side ppid-walk that mirrors the readers' resolveOwnerKey,
+    //      so a stale launcher / env-injection failure still yields the SAME
+    //      claude pid the hooks resolve (MCP -> launcher -> claude);
+    //   3) this MCP process pid as a last resort.
+    const envKey = (process.env.CLORCHUI_OWNER_KEY || '').replace(/[^0-9]/g, '');
+    const walkedKey = envKey ? '' : (vendoredResolveOwnerKey() || '');
+    this._ownerKey = envKey || walkedKey || String(process.pid);
     // Serve the HUD ws over TLS (wss://). An insecure ws:// from an HTTPS
     // top-level origin is blocked by Chromium as mixed active content (the
     // handshake silently stalls). A self-signed cert for loopback fixes this;
