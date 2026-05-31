@@ -57,12 +57,17 @@ class HudServer {
   private _pending: ManualPromise<ReceivedHudMessage | null> | null = null;
   private _readyPromise: Promise<number>;
   private _projectRoot: string;
+  private _ownerKey: string;
   // Bridge from Context.ensureHudInjected — used by _captureShot to resolve a
   // Page by URL when a HUD message arrives.
   private _browserContext: playwrightTypes.BrowserContext | null = null;
 
   constructor(projectRoot: string) {
     this._projectRoot = projectRoot;
+    // Resolve owner key once at construction time. The launcher injects
+    // CLORCHUI_OWNER_KEY = the claude session pid so sister sessions each
+    // get a distinct key. Fall back to this MCP process pid if unset.
+    this._ownerKey = (process.env.CLORCHUI_OWNER_KEY || String(process.pid)).replace(/[^0-9]/g, '') || String(process.pid);
     // Serve the HUD ws over TLS (wss://). An insecure ws:// from an HTTPS
     // top-level origin is blocked by Chromium as mixed active content (the
     // handshake silently stalls). A self-signed cert for loopback fixes this;
@@ -240,7 +245,7 @@ class HudServer {
       return undefined;
     }
 
-    const shotsDir = path.join(this._projectRoot, '.clorchui-hud-shots');
+    const shotsDir = path.join(this._projectRoot, '.clorchui-hud', `${this._ownerKey}.shots`);
     const tsFile = received.timestamp.replace(/[:.]/g, '-');
     const hash6 = crypto.randomBytes(3).toString('hex');
     const outPath = path.join(shotsDir, `${tsFile}-${hash6}.png`);
@@ -346,10 +351,19 @@ class HudServer {
 
   private _appendQueue(received: ReceivedHudMessage) {
     try {
-      const target = path.join(this._projectRoot, '.clorchui-hud-queue.jsonl');
+      const hudDir = path.join(this._projectRoot, '.clorchui-hud');
+      const target = path.join(hudDir, `${this._ownerKey}.jsonl`);
+      try {
+        fs.mkdirSync(hudDir, { recursive: true });
+      } catch (mkdirErr) {
+        log('HUD queue mkdir failed: %s', (mkdirErr as Error).message);
+      }
+      // Stamp owner onto the persisted record only — do not mutate the
+      // in-memory object consumed by waitForMessage/drainQueued.
+      const persisted = { ...received, owner: this._ownerKey };
       // Append-only JSONL: one JSON object per line. appendFileSync creates the
       // file if missing and is atomic enough for single-line appends.
-      fs.appendFileSync(target, JSON.stringify(received) + '\n', 'utf-8');
+      fs.appendFileSync(target, JSON.stringify(persisted) + '\n', 'utf-8');
       log('HUD message appended to queue: %s', target);
     } catch (err) {
       // Log, never crash the socket handler.
