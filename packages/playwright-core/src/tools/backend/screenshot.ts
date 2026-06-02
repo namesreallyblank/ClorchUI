@@ -56,7 +56,52 @@ const screenshot = defineTabTool({
 
     const screenshotTargetLabel = params.target ? params.element || 'element' : (params.fullPage ? 'full page' : 'viewport');
     const target = params.target ? await tab.targetLocator({ element: params.element, target: params.target }) : null;
-    const data = target ? await target.locator.screenshot(options) : await tab.page.screenshot(options);
+
+    // Hide ClorchUI HUD overlay before capturing so it does not appear in the screenshot.
+    // Best-effort: a hide failure must never break the screenshot itself.
+    let hudHidden = false;
+    try {
+      hudHidden = await tab.page.evaluate(() => {
+        const w = window as any;
+        if (!w.__clorchHud)
+          return false;
+        const NS = 'clorch-hud-';
+        const nodes = document.querySelectorAll<HTMLElement>(`[class^="${NS}"], [class*=" ${NS}"]`);
+        if (!nodes.length)
+          return false;
+        const stash: Array<[HTMLElement, string]> = [];
+        nodes.forEach(n => {
+          stash.push([n, n.style.visibility]);
+          n.style.visibility = 'hidden';
+        });
+        w.__clorchHudShotStash = stash;
+        return true;
+      });
+    } catch {
+      // Ignore — non-HUD pages or evaluate failure; proceed with screenshot as-is.
+    }
+
+    let data: Buffer;
+    try {
+      data = target ? await target.locator.screenshot(options) : await tab.page.screenshot(options);
+    } finally {
+      if (hudHidden) {
+        try {
+          await tab.page.evaluate(() => {
+            const w = window as any;
+            const stash: Array<[HTMLElement, string]> | undefined = w.__clorchHudShotStash;
+            if (!stash)
+              return;
+            stash.forEach(([n, prev]) => {
+              n.style.visibility = prev;
+            });
+            delete w.__clorchHudShotStash;
+          });
+        } catch {
+          // Ignore restore failure — page may have navigated.
+        }
+      }
+    }
 
     const resolvedFile = await response.resolveClientFile({ prefix: target ? 'element' : 'page', ext: fileType, suggestedFilename: params.filename }, `Screenshot of ${screenshotTargetLabel}`);
 
