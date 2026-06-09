@@ -41,3 +41,5 @@ playwright.env
 /firefox/
 .playwright/
 .npmrc
+.claude/
+thoughts/
