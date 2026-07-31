@@ -113,6 +113,7 @@ export function decorateMCPCommand(command: Command) {
 
         const useSharedBrowser = config.sharedBrowserContext || config.browser.isolated;
         let sharedBrowser: playwright.Browser | undefined;
+        let browserOwnership: 'attached' | 'own' = 'own';
         let clientCount = 0;
         const clientNameCounters = new Map<string, number>();
 
@@ -123,13 +124,16 @@ export function decorateMCPCommand(command: Command) {
           toolSchemas: tools.map(tool => tool.schema),
           create: async (clientInfo: ClientInfo) => {
             if (useSharedBrowser && clientCount === 0) {
-              const { browser, canBind } = await createBrowserWithInfo(config, clientInfo, options);
+              const { browser, canBind, ownership } = await createBrowserWithInfo(config, clientInfo, options);
               sharedBrowser = browser;
+              browserOwnership = ownership;
               if (canBind)
                 await browser.bind(clientInfo.clientName, { workspaceDir: clientInfo.cwd });
             }
             clientCount++;
-            const { browser, canBind } = sharedBrowser ? { browser: sharedBrowser, canBind: false } : await createBrowserWithInfo(config, clientInfo, options);
+            const created = sharedBrowser ? { browser: sharedBrowser, canBind: false, ownership: browserOwnership } : await createBrowserWithInfo(config, clientInfo, options);
+            const { browser, canBind } = created;
+            browserOwnership = created.ownership;
             if (canBind) {
               const count = (clientNameCounters.get(clientInfo.clientName) ?? 0) + 1;
               clientNameCounters.set(clientInfo.clientName, count);
@@ -147,7 +151,11 @@ export function decorateMCPCommand(command: Command) {
             testDebug('close browser');
             sharedBrowser = undefined;
             const browserContext = (backend as BrowserBackend).browserContext;
-            await browserContext.close().catch(() => { });
+            // An attached browser (--connect / --cdp-endpoint / extension) and its context are
+            // owned by another process; closing the context would tear down that owner's session.
+            // browser.close() is connection-only for those transports, so it stays unconditional.
+            if (browserOwnership === 'own')
+              await browserContext.close().catch(() => { });
             await browserContext.browser()!.close().catch(() => { });
           }
         };
