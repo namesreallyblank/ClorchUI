@@ -231,7 +231,7 @@ export function hudClientScript(arg: { port: number }) {
       if (cls)
         selector += '.' + cssEscape(cls);
       // nth-of-type for disambiguation among same-tag siblings.
-      const parent = node.parentElement;
+      const parent: HTMLElement | null = node.parentElement;
       if (parent) {
         const sameTag = Array.prototype.filter.call(
             parent.children,

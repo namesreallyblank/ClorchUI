@@ -66,7 +66,7 @@ const responsivePreview = defineTabTool({
         await response.addResult(
           `Viewport ${width}px`,
           screenshot,
-          { prefix: `responsive-${width}w`, ext: 'png', suggestedFilename: filename, contentType: 'image/png' }
+          { prefix: `responsive-${width}w`, ext: 'png', suggestedFilename: filename }
         );
 
         previews.push({

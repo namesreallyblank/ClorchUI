@@ -228,7 +228,7 @@ const viewportMatrix = defineTabTool({
           await response.addResult(
               `Viewport ${width}px`,
               screenshot,
-              { prefix: `viewport-matrix-${width}w`, ext: 'png', suggestedFilename: filename, contentType: 'image/png' }
+              { prefix: `viewport-matrix-${width}w`, ext: 'png', suggestedFilename: filename }
           );
           viewportResult.screenshotPath = filename;
         }
