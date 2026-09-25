@@ -97,7 +97,7 @@ export function decorateMCPCommand(command: Command) {
         const config = await resolveCLIConfigForMCP(options);
         const tools = filteredTools(config);
         const useSharedBrowser = config.sharedBrowserContext || config.browser.isolated;
-        let sharedBrowserPromise: Promise<playwright.Browser> | undefined;
+        let sharedBrowserPromise: Promise<{ browser: playwright.Browser, ownership: 'attached' | 'own' }> | undefined;
         let clientCount = 0;
         const clientNameCounters = new Map<string, number>();
 
@@ -109,14 +109,14 @@ export function decorateMCPCommand(command: Command) {
           create: async (clientInfo: ClientInfo) => {
             if (useSharedBrowser && !sharedBrowserPromise) {
               const promise = (async () => {
-                const { browser, canBind } = await createBrowserWithInfo(config, clientInfo, options);
+                const { browser, canBind, ownership } = await createBrowserWithInfo(config, clientInfo, options);
                 if (canBind)
                   await browser.bind(clientInfo.clientName, { workspaceDir: clientInfo.cwd });
                 browser.once('disconnected', () => {
                   if (sharedBrowserPromise === promise)
                     sharedBrowserPromise = undefined;
                 });
-                return browser;
+                return { browser, ownership };
               })().catch(error => {
                 if (sharedBrowserPromise === promise)
                   sharedBrowserPromise = undefined;
@@ -127,7 +127,7 @@ export function decorateMCPCommand(command: Command) {
             clientCount++;
             try {
               const promise = sharedBrowserPromise;
-              const { browser, canBind } = promise ? { browser: await promise, canBind: false } : await createBrowserWithInfo(config, clientInfo, options);
+              const { browser, canBind, ownership } = promise ? { ...await promise, canBind: false } : await createBrowserWithInfo(config, clientInfo, options);
               if (canBind) {
                 const count = (clientNameCounters.get(clientInfo.clientName) ?? 0) + 1;
                 clientNameCounters.set(clientInfo.clientName, count);
@@ -149,7 +149,11 @@ export function decorateMCPCommand(command: Command) {
                 testDebug('close browser');
                 if (sharedBrowserPromise === promise)
                   sharedBrowserPromise = undefined;
-                await browserContext.close().catch(() => { });
+                // An attached browser (--endpoint, --cdp-endpoint, extension) belongs to another
+                // process: closing its context would tear down that owner's session. For those
+                // transports browser.close() only drops our connection, so it stays unconditional.
+                if (ownership === 'own')
+                  await browserContext.close().catch(() => { });
                 await browser.close().catch(() => { });
               });
             } catch (error) {
