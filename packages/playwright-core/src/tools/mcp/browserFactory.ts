@@ -247,6 +247,19 @@ export function isProfileLocked(userDataDir: string): boolean {
   }
 }
 
+// The ClorchUI launcher (bin/clorchui-launcher.mjs) claims a persistent profile slot
+// by writing its own pid to <slot>/.clorchui-slot.lock/pid, then spawns this server
+// as its direct child. The claim is ours exactly while that file names our parent.
+export function launcherHoldsSlotClaim(userDataDir: string): boolean {
+  const pidFile = path.join(userDataDir, '.clorchui-slot.lock', 'pid');
+  try {
+    return parseInt(fs.readFileSync(pidFile, 'utf8'), 10) === process.ppid;
+  } catch (error: any) {
+    testDebug(`no readable slot claim at ${pidFile}: ${error.message}`);
+    return false;
+  }
+}
+
 function throwIfExecutableMissing(error: Error, config: FullConfig): void {
   // The "Executable doesn't exist" prefix is shared by all managed binaries
   // (browser, ffmpeg, winldd). Disambiguate by the path so the user is told

@@ -18,7 +18,7 @@ import { Option as ProgramOption } from 'commander';
 import * as mcpServer from '../utils/mcp/server';
 import { commaSeparatedList, defaultCodegenLanguage, dotenvFileLoader, enumParser, headerParser, numberParser, resolutionParser, resolveCLIConfigForMCP, semicolonSeparatedList } from './config';
 import { setupExitWatchdog } from './watchdog';
-import { createBrowserWithInfo } from './browserFactory';
+import { createBrowserWithInfo, launcherHoldsSlotClaim } from './browserFactory';
 import { BrowserBackend } from '../backend/browserBackend';
 import { filteredTools } from '../backend/tools';
 import { testDebug } from './log';
@@ -101,6 +101,21 @@ export function decorateMCPCommand(command: Command) {
         let clientCount = 0;
         const clientNameCounters = new Map<string, number>();
 
+        // Persistent profile slot that the ClorchUI launcher had claimed for us when we
+        // first launched into it. Once our browser is dead the launcher lets a sibling
+        // session reclaim that slot, so relaunch only while our launcher still holds it.
+        // Attached browsers, isolated browsers and unclaimed profiles reconnect as upstream.
+        let claimedSlot: string | undefined;
+        const launchBrowser = async (clientInfo: ClientInfo) => {
+          if (claimedSlot && !launcherHoldsSlotClaim(claimedSlot))
+            throw new Error(`BROWSER_DISCONNECTED: the browser for profile ${claimedSlot} is gone and this session's launcher no longer holds that profile slot, so it will not be relaunched. Restart this MCP session to get a browser through the launcher.`);
+          const result = await createBrowserWithInfo(config, clientInfo, options);
+          const userDataDir = config.browser.userDataDir;
+          if (result.ownership === 'own' && !config.browser.isolated && userDataDir && launcherHoldsSlotClaim(userDataDir))
+            claimedSlot = userDataDir;
+          return result;
+        };
+
         const factory: mcpServer.ServerBackendFactory = {
           name: 'Playwright',
           nameInConfig: 'playwright',
@@ -109,7 +124,7 @@ export function decorateMCPCommand(command: Command) {
           create: async (clientInfo: ClientInfo) => {
             if (useSharedBrowser && !sharedBrowserPromise) {
               const promise = (async () => {
-                const { browser, canBind, ownership } = await createBrowserWithInfo(config, clientInfo, options);
+                const { browser, canBind, ownership } = await launchBrowser(clientInfo);
                 if (canBind)
                   await browser.bind(clientInfo.clientName, { workspaceDir: clientInfo.cwd });
                 browser.once('disconnected', () => {
@@ -127,7 +142,7 @@ export function decorateMCPCommand(command: Command) {
             clientCount++;
             try {
               const promise = sharedBrowserPromise;
-              const { browser, canBind, ownership } = promise ? { ...await promise, canBind: false } : await createBrowserWithInfo(config, clientInfo, options);
+              const { browser, canBind, ownership } = promise ? { ...await promise, canBind: false } : await launchBrowser(clientInfo);
               if (canBind) {
                 const count = (clientNameCounters.get(clientInfo.clientName) ?? 0) + 1;
                 clientNameCounters.set(clientInfo.clientName, count);
