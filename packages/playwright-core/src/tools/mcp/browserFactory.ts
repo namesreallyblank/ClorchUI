@@ -20,7 +20,7 @@ import path from 'path';
 
 import { playwright } from '../../inprocess';
 import { defaultCacheDirectory } from '../../server/registry/index';
-import { testDebug } from './log';
+import { slotDebug, testDebug } from './log';
 import { outputDir } from '../backend/context';
 import { createExtensionBrowser } from './extensionContextFactory';
 import { connectToBrowserAcrossVersions } from '../utils/connect';
@@ -255,7 +255,7 @@ export function launcherHoldsSlotClaim(userDataDir: string): boolean {
   try {
     return parseInt(fs.readFileSync(pidFile, 'utf8'), 10) === process.ppid;
   } catch (error: any) {
-    testDebug(`no readable slot claim at ${pidFile}: ${error.message}`);
+    slotDebug(`no readable slot claim at ${pidFile}: ${error.message}`);
     return false;
   }
 }

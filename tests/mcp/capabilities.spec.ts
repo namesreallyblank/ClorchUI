@@ -43,6 +43,25 @@ test('test snapshot tool list', async ({ client }) => {
     'browser_tabs',
     'browser_take_screenshot',
     'browser_wait_for',
+    // ClorchUI fork tools (uiux_responsive_preview needs --caps=vision).
+    'browser_hud_close',
+    'browser_hud_open',
+    'browser_hud_watch',
+    'uiux_accessibility_audit',
+    'uiux_animation_audit',
+    'uiux_color_extract',
+    'uiux_contrast_check',
+    'uiux_css_coverage',
+    'uiux_css_variables',
+    'uiux_font_audit',
+    'uiux_highlight_element',
+    'uiux_inspect_element',
+    'uiux_layout_debug',
+    'uiux_overflow_audit',
+    'uiux_performance_metrics',
+    'uiux_spacing_audit',
+    'uiux_touch_targets',
+    'uiux_viewport_matrix',
   ]));
 });
 
@@ -64,6 +83,7 @@ test('test capabilities (vision)', async ({ startClient }) => {
   expect(toolNames).toContain('browser_mouse_move_xy');
   expect(toolNames).toContain('browser_mouse_click_xy');
   expect(toolNames).toContain('browser_mouse_drag_xy');
+  expect(toolNames).toContain('uiux_responsive_preview');
 });
 
 test('support for legacy --vision option', async ({ startClient }) => {

@@ -22,3 +22,5 @@ export function logUnhandledError(error: unknown) {
 }
 
 export const testDebug = debug('pw:mcp:test');
+// Kept off pw:mcp:test: specs count that channel's lines exactly.
+export const slotDebug = debug('pw:mcp:slot');
