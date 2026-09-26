@@ -38,6 +38,7 @@ import type { Disposable } from '@isomorphic/disposable';
 import type { ToolCapability } from './tool';
 
 const testDebug = debug('pw:mcp:test');
+const hudDebug = debug('pw:mcp:hud');
 
 export type ContextConfig = {
   allowUnrestrictedFileAccess?: boolean;
@@ -116,6 +117,7 @@ export class Context {
 
   private _runningToolName: string | undefined;
   private _hudInjected = false;
+  private _hudInitScript: Disposable | undefined;
   private _pendingUnhandledRejections: unknown[] = [];
   private _unhandledRejectionListeners = new Set<(reason: unknown) => void>();
   private _onUnhandledRejection = (reason: unknown) => {
@@ -135,6 +137,11 @@ export class Context {
 
   async dispose() {
     process.off('unhandledRejection', this._onUnhandledRejection);
+    // Not awaited: an extra await here delays the BrowserBackend dispose callback past the
+    // browser 'disconnected' listeners, which changes the shared-browser dispose ordering
+    // that upstream relies on (http.spec 'relaunches a crashed shared browser').
+    this._hudInitScript?.dispose().catch(error => hudDebug(`HUD init script dispose failed: ${error?.message ?? error}`));
+    this._hudInitScript = undefined;
     await this.stopRecording();
     await disposeAll(this._disposables);
     for (const tab of this._tabs)
@@ -389,7 +396,7 @@ export class Context {
     server.registerBrowserContext(browserContext);
     if (!this._hudInjected) {
       this._hudInjected = true;
-      this._disposables.push(await browserContext.addInitScript(hudClientScript, { port: server.port }));
+      this._hudInitScript = await browserContext.addInitScript(hudClientScript, { port: server.port });
     }
     return server.port;
   }
